@@ -26,6 +26,10 @@ spec:
     value: quay.io/redhat-user-workloads/rh-ee-jcullina-tenant/test-clam-new-task-ce0b4:{{revision}}
   - name: dockerfile
     value: Dockerfile
+  - name: hermetic
+    value: "true"
+  - name: prefetch-input
+    value: '[{"type": "rpm", "path": "."}, {"type": "generic", "path": "."}]'
   pipelineSpec:
     description: |
       This pipeline is ideal for building container images from a Containerfile while maintaining trust after pipeline customization.
@@ -173,36 +177,36 @@ spec:
         value: $(params.output-image).prefetch
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
-      # CHANGE 1: Use a standard Red Hat image (runs as root)
       - name: runtimeImage
         value: "registry.access.redhat.com/ubi9/ubi-minimal:latest"
-      # CHANGE 2: Install ClamAV dynamically, then run the update
       - name: executionScript
         value: |
           #!/usr/bin/env bash
           set -o errexit
           set -o nounset
           set -o pipefail
-
+          
           # 1. Install EPEL repo
           rpm -ivh https://dl.fedoraproject.org/pub/epel/epel-release-latest-9.noarch.rpm
           
-          # 2. Install ClamAV
+          # 2. Install ClamAV ONLY (curl is already there!)
           microdnf install -y clamav clamav-update
           
-          # 3. Prepare the directory
+          # 3. Setup DB Directory
           DB_DIR=/var/workdir/source/clamav-db
           mkdir -p "$DB_DIR"
-
-          # FIX: Make the directory writable so freshclam (UID 999) can save files there
           chmod 777 "$DB_DIR"
           
-          # 4. Configure freshclam (Critical Fix: Added DatabaseMirror)
+          # 4. Run Freshclam (Virus DB)
           echo "DatabaseDirectory $DB_DIR" > /tmp/freshclam.conf
           echo "DatabaseMirror database.clamav.net" >> /tmp/freshclam.conf
-          
-          # 5. Run freshclam
           freshclam --config-file=/tmp/freshclam.conf
+          
+          # 5. Download GPG Key (Works because curl-minimal is installed)
+          curl -L -o /var/workdir/source/RPM-GPG-KEY-EPEL-9 https://dl.fedoraproject.org/pub/epel/RPM-GPG-KEY-EPEL-9
+          
+          # 6. Download OpenShift Client
+          curl -L -o /var/workdir/source/openshift-client-linux.tar.gz https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/stable/openshift-client-linux.tar.gz
       runAfter:
       - clone-repository
       taskRef:
@@ -224,6 +228,8 @@ spec:
         value: $(params.output-image).prefetch
       - name: ociArtifactExpiresAfter
         value: $(params.image-expires-after)
+      - name: dev-package-managers
+        value: "true"
       runAfter:
       - fetch-db-data
       taskRef:
